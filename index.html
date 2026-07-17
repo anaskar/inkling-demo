@@ -380,17 +380,36 @@ document.addEventListener("keyup", (e) => { if (e.code === "Space") stopRec(); }
 
 /* ---------- WAV encoding (downsample native → 16kHz, PCM16) ---------- */
 const TARGET_RATE = 16000;
-function buffersToWav(buffers, nativeRate) {
+
+/* Merge captured Float32 chunks, then resample native → 16 kHz through an
+   OfflineAudioContext so the browser applies a proper band-limiting filter
+   (no aliasing), before PCM16/WAV encoding. The old path decimated with bare
+   linear interpolation and no low-pass, which aliased sibilants back into the
+   vowel band and made the model mishear words. Falls back to the raw buffer
+   when the rate already matches or OfflineAudioContext is unavailable. */
+async function buffersToWav(buffers, nativeRate) {
   let total = 0; for (const b of buffers) total += b.length;
   const merged = new Float32Array(total); let off = 0;
   for (const b of buffers) { merged.set(b, off); off += b.length; }
-  const ratio = nativeRate / TARGET_RATE;
-  const outLen = Math.floor(merged.length / ratio);
-  const pcm = new Int16Array(outLen);
-  for (let i = 0; i < outLen; i++) {
-    const pos = i * ratio, i0 = Math.floor(pos), frac = pos - i0;
-    const s = merged[i0] + (merged[Math.min(i0 + 1, merged.length - 1)] - merged[i0]) * frac;
-    pcm[i] = Math.max(-32768, Math.min(32767, s * 32767));
+
+  let out = merged;
+  if (nativeRate !== TARGET_RATE && typeof OfflineAudioContext !== "undefined") {
+    const outLen = Math.max(1, Math.round(merged.length * TARGET_RATE / nativeRate));
+    const octx = new OfflineAudioContext(1, outLen, TARGET_RATE);
+    const srcBuf = octx.createBuffer(1, merged.length, nativeRate);
+    srcBuf.copyToChannel(merged, 0);
+    const src = octx.createBufferSource(); src.buffer = srcBuf;
+    const lp = octx.createBiquadFilter();            // guard vs. naive resamplers
+    lp.type = "lowpass"; lp.frequency.value = TARGET_RATE * 0.45; // ~7.2 kHz
+    src.connect(lp); lp.connect(octx.destination);
+    src.start();
+    out = (await octx.startRendering()).getChannelData(0);
+  }
+
+  const pcm = new Int16Array(out.length);
+  for (let i = 0; i < out.length; i++) {
+    const s = Math.max(-1, Math.min(1, out[i]));
+    pcm[i] = s < 0 ? s * 32768 : s * 32767;
   }
   const buf = new ArrayBuffer(44 + pcm.length * 2);
   const v = new DataView(buf);
@@ -401,7 +420,7 @@ function buffersToWav(buffers, nativeRate) {
   v.setUint16(32, 2, true); v.setUint16(34, 16, true);
   wstr(36, "data"); v.setUint32(40, pcm.length * 2, true);
   new Int16Array(buf, 44).set(pcm);
-  return { buf, seconds: outLen / TARGET_RATE };
+  return { buf, seconds: pcm.length / TARGET_RATE };
 }
 function b64(arrayBuf) {
   const bytes = new Uint8Array(arrayBuf); let s = "";
@@ -416,7 +435,7 @@ async function sendTurn() {
   if (!c.key) { log("no API key — open ⚙︎ settings", "e"); addCaption("user", "⚠ no API key set (⚙︎)"); return; }
   if (!recBuffers.length) { log("no audio captured", "e"); return; }
 
-  const { buf, seconds } = buffersToWav(recBuffers, audioCtx.sampleRate);
+  const { buf, seconds } = await buffersToWav(recBuffers, audioCtx.sampleRate);
   if (seconds < 0.3) { log("recording too short, ignored"); setState("ready"); return; }
   const audioUrl = "data:audio/wav;base64," + b64(buf);
 
