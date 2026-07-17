@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Inkling Demo Harness</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14171c;
+    --border: #262b33;
+    --text: #e8eaed;
+    --dim: #8a919c;
+    --accent: #4fe3a3;
+    --warn: #ffb454;
+    --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "SF Pro Display", "Segoe UI", sans-serif; overflow: hidden; }
+
+  /* ---------- Stage (what gets filmed) ---------- */
+  #stage { position: relative; height: 100%; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; }
+
+  #stopwatch { position: absolute; top: 28px; left: 50%; transform: translateX(-50%);
+    font-variant-numeric: tabular-nums; font-size: 64px; font-weight: 600;
+    letter-spacing: 2px; color: var(--text); user-select: none; }
+  #stopwatch.running { color: var(--accent); }
+
+  #statusbar { position: absolute; top: 28px; left: 28px; display: flex; gap: 14px;
+    align-items: center; font-size: 13px; color: var(--dim); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--err); display: inline-block; margin-right: 5px; }
+  .dot.ok { background: var(--accent); }
+
+  #latency { position: absolute; top: 28px; right: 28px; text-align: right;
+    font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #latency .big { font-size: 26px; color: var(--text); display: block; }
+
+  #viz { width: 420px; height: 120px; }
+
+  #modelstate { margin-top: 8px; font-size: 15px; color: var(--dim);
+    text-transform: uppercase; letter-spacing: 3px; height: 20px; }
+  #modelstate.rec { color: var(--err); }
+  #modelstate.thinking { color: var(--warn); }
+  #modelstate.answering { color: var(--accent); }
+
+  /* Captions / transcript */
+  #captions { position: absolute; bottom: 150px; left: 50%; transform: translateX(-50%);
+    width: min(920px, 88vw); text-align: center; pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; }
+  .cap { padding: 12px 24px; border-radius: 12px; margin-top: 10px;
+    font-size: 26px; line-height: 1.4; font-weight: 500; max-width: 100%; }
+  .cap.model { background: rgba(79, 227, 163, 0.12); color: #dcffee;
+    border: 1px solid rgba(79,227,163,0.25); text-align: left; }
+  .cap.user { background: rgba(255,255,255,0.06); color: var(--dim); font-size: 17px;
+    border: 1px solid var(--border); }
+
+  /* Webcam PiP */
+  #pip { position: absolute; bottom: 28px; right: 28px; width: 300px; aspect-ratio: 4/3;
+    border-radius: 14px; overflow: hidden; border: 1px solid var(--border);
+    background: #000; }
+  #pip video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  #pip .pip-label { position: absolute; top: 8px; left: 10px; font-size: 11px;
+    color: rgba(255,255,255,0.75); background: rgba(0,0,0,0.45); padding: 2px 8px;
+    border-radius: 6px; letter-spacing: 1px; }
+  #pip.rec { border-color: var(--err); }
+  #frameCount { position: absolute; bottom: 8px; left: 10px; font-size: 11px;
+    color: rgba(255,255,255,0.75); background: rgba(0,0,0,0.45); padding: 2px 8px;
+    border-radius: 6px; }
+
+  #brand { position: absolute; bottom: 28px; left: 28px; font-size: 13px; color: var(--dim); }
+  #brand b { color: var(--text); }
+
+  /* ---------- Controls / config drawer ---------- */
+  #controls { position: absolute; bottom: 84px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 10px; transition: opacity 0.25s; align-items: center; }
+  button { background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 18px; border-radius: 10px; font-size: 14px; cursor: pointer; }
+  button:hover { border-color: var(--dim); }
+  button.primary { background: var(--accent); color: #06251a; border: none; font-weight: 600; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  #btnTalk { min-width: 220px; padding: 14px 22px; font-size: 15px; font-weight: 600; }
+  #btnTalk.rec { background: var(--err); color: #fff; border: none; }
+
+  #drawer { position: absolute; top: 0; right: 0; height: 100%; width: 400px;
+    background: var(--panel); border-left: 1px solid var(--border); padding: 24px;
+    transform: translateX(100%); transition: transform 0.25s; overflow-y: auto; z-index: 10; }
+  #drawer.open { transform: translateX(0); }
+  #drawer h2 { font-size: 15px; margin-bottom: 16px; }
+  #drawer label { display: block; font-size: 12px; color: var(--dim); margin: 14px 0 4px; }
+  #drawer input[type=text], #drawer input[type=password], #drawer input[type=number], #drawer textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 10px; border-radius: 8px; font-size: 13px; font-family: ui-monospace, monospace; }
+  #drawer textarea { min-height: 90px; resize: vertical; font-family: inherit; }
+  #drawer .row { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; }
+  #drawer .hint { font-size: 11px; color: var(--dim); margin-top: 4px; line-height: 1.4; }
+
+  .filming #controls, .filming #gear { opacity: 0; pointer-events: none; }
+  #gear { position: absolute; top: 70px; right: 28px; z-index: 11; }
+
+  #log { position: absolute; left: 28px; top: 70px; width: 360px; max-height: 40vh;
+    overflow-y: auto; font: 11px ui-monospace, monospace; color: var(--dim);
+    background: rgba(0,0,0,0.35); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px; display: none; z-index: 5; }
+  .filming #log { display: none !important; }
+  #log div { margin-bottom: 3px; word-break: break-all; }
+  #log .e { color: var(--err); } #log .m { color: var(--accent); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="statusbar">
+    <span><span class="dot" id="micdot"></span>mic</span>
+    <span><span class="dot" id="camdot"></span>cam</span>
+    <span id="keystate">no key</span>
+  </div>
+
+  <div id="stopwatch">00:00.0</div>
+
+  <div id="latency"><span class="big" id="latms">–</span>time to first token</div>
+
+  <canvas id="viz" width="840" height="240"></canvas>
+  <div id="modelstate">ready</div>
+
+  <div id="controls">
+    <button class="primary" id="btnStart">Start session</button>
+    <button id="btnTalk" disabled>🎙 Hold to talk (or hold Space)</button>
+    <button id="btnWatch">⏱ Start timer</button>
+    <button id="btnWatchReset">Reset</button>
+    <button id="btnClear">Clear chat</button>
+    <button id="btnFilm">🎬 Filming mode</button>
+    <button id="btnLog">Log</button>
+  </div>
+
+  <div id="captions"></div>
+
+  <div id="pip">
+    <video id="cam" autoplay muted playsinline></video>
+    <span class="pip-label">MODEL'S VIEW</span>
+    <span id="frameCount"></span>
+  </div>
+
+  <div id="brand">thinkingmachines/inkling · <b>Baseten Model APIs</b></div>
+
+  <button id="gear" title="Settings">⚙︎</button>
+  <div id="log"></div>
+</div>
+
+<div id="drawer">
+  <h2>Session config</h2>
+
+  <label>Baseten API key</label>
+  <input type="password" id="cfgKey" placeholder="paste key (kept in memory only)">
+
+  <label>Endpoint</label>
+  <input type="text" id="cfgUrl" value="https://inference.baseten.co/v1/chat/completions">
+
+  <label>Model</label>
+  <input type="text" id="cfgModel" value="thinkingmachines/inkling">
+
+  <label>Instruction (system prompt, sent every turn)</label>
+  <textarea id="cfgSys">You are Inkling, demoed live. You receive the user's raw speech as audio plus webcam snapshots taken while they spoke. Pay attention to tone of voice, pacing, and what is visible in the frames, not just the words. Answer in 1-2 short sentences.</textarea>
+
+  <div class="row"><input type="checkbox" id="cfgVideo" checked> <span>Attach webcam frames</span></div>
+  <label>Frames per second while recording</label>
+  <input type="number" id="cfgFps" value="1" step="0.5">
+  <label>Max frames per turn</label>
+  <input type="number" id="cfgMaxFrames" value="8">
+  <div class="hint">Frames are JPEG snapshots captured while you hold the talk button, sent as image_url parts. More frames = better motion coverage (rep counting) but bigger payload. Keep total request under 5&nbsp;MB.</div>
+
+  <div class="row"><input type="checkbox" id="cfgHistory" checked> <span>Keep conversation history</span></div>
+  <div class="hint">Prior turns are resent as text summaries (audio stripped) so follow-up questions work without blowing up payload size.</div>
+
+  <button style="margin-top:20px" id="btnCloseDrawer">Close</button>
+</div>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   Turn-based harness for Inkling on Baseten Model APIs.
+   Flow: hold the talk button → mic audio is recorded and webcam frames
+   snapshotted → on release, audio is encoded as 16kHz WAV and sent with
+   the frames to /v1/chat/completions (OpenAI-compatible, streaming) →
+   the reply streams into the caption area; TTFT is displayed.
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+const logEl = $("log");
+function log(t, cls) { const d = document.createElement("div"); if (cls) d.className = cls;
+  d.textContent = `${new Date().toISOString().slice(11,23)} ${t}`;
+  logEl.appendChild(d); logEl.scrollTop = 1e9;
+  while (logEl.children.length > 300) logEl.firstChild.remove(); }
+
+const cfg = () => ({
+  key: $("cfgKey").value.trim(),
+  url: $("cfgUrl").value.trim(),
+  model: $("cfgModel").value.trim(),
+  sys: $("cfgSys").value.trim(),
+  video: $("cfgVideo").checked,
+  fps: Math.max(0.25, +$("cfgFps").value || 1),
+  maxFrames: Math.max(1, +$("cfgMaxFrames").value || 8),
+  history: $("cfgHistory").checked,
+});
+$("cfgKey").addEventListener("input", () =>
+  $("keystate").textContent = $("cfgKey").value.trim() ? "key set" : "no key");
+
+/* ---------- Stopwatch ---------- */
+let swRunning = false, swBase = 0, swStart = 0, swInterval = null;
+function swRender() {
+  const ms = swBase + (swRunning ? performance.now() - swStart : 0);
+  const m = Math.floor(ms / 60000), s = Math.floor(ms / 1000) % 60, t = Math.floor(ms / 100) % 10;
+  $("stopwatch").textContent = `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}.${t}`;
+}
+$("btnWatch").onclick = () => {
+  if (swRunning) {
+    swRunning = false; swBase += performance.now() - swStart;
+    clearInterval(swInterval); swInterval = null;
+    $("btnWatch").textContent = "⏱ Start timer"; $("stopwatch").classList.remove("running");
+    swRender();
+  } else {
+    swRunning = true; swStart = performance.now();
+    swInterval = setInterval(swRender, 50);
+    $("btnWatch").textContent = "⏸ Pause timer"; $("stopwatch").classList.add("running");
+  }
+};
+$("btnWatchReset").onclick = () => {
+  swRunning = false; swBase = 0;
+  if (swInterval) { clearInterval(swInterval); swInterval = null; }
+  $("stopwatch").textContent = "00:00.0"; $("stopwatch").classList.remove("running");
+  $("btnWatch").textContent = "⏱ Start timer";
+};
+
+/* ---------- Captions ---------- */
+const capBox = $("captions");
+function addCaption(role, text) {
+  const d = document.createElement("div");
+  d.className = "cap " + role; d.textContent = text; capBox.appendChild(d);
+  while (capBox.children.length > 4) capBox.firstChild.remove();
+  return d;
+}
+$("btnClear").onclick = () => { capBox.innerHTML = ""; history = []; log("chat cleared"); };
+
+/* ---------- Model state ---------- */
+function setState(s, cls) { const el = $("modelstate"); el.textContent = s; el.className = cls || ""; }
+
+/* ---------- Waveform viz ---------- */
+const viz = $("viz").getContext("2d");
+let vizLevel = 0, modelLevel = 0;
+(function drawViz() {
+  const w = 840, h = 240; viz.clearRect(0, 0, w, h);
+  const t = performance.now() / 1000;
+  viz.lineWidth = 3;
+  for (let [level, color, phase] of [[vizLevel, "rgba(255,255,255,0.35)", 0], [modelLevel, "rgba(79,227,163,0.9)", 2]]) {
+    level = Math.max(level, 0.03);
+    viz.strokeStyle = color; viz.beginPath();
+    for (let x = 0; x <= w; x += 6) {
+      const y = h/2 + Math.sin(x/40 + t*6 + phase) * Math.sin(x/17 + t*9) * level * h * 0.42;
+      x === 0 ? viz.moveTo(x, y) : viz.lineTo(x, y);
+    }
+    viz.stroke();
+  }
+  modelLevel *= 0.95;
+  requestAnimationFrame(drawViz);
+})();
+
+/* ---------- Session: mic + cam ---------- */
+let media = null, audioCtx = null, workletNode = null, micMeter = null;
+let recording = false, recBuffers = [], recFrames = [], frameTimer = null;
+let history = [];
+const setDot = (id, ok) => $(id).className = "dot" + (ok ? " ok" : "");
+
+async function startSession() {
+  $("btnStart").disabled = true;
+  try {
+    media = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      video: { width: 640, height: 480 },
+    });
+    $("cam").srcObject = media;
+    setDot("micdot", true); setDot("camdot", true);
+    log("mic + cam acquired");
+  } catch (e) { log("getUserMedia failed: " + e.message, "e"); $("btnStart").disabled = false; return; }
+
+  try {
+    audioCtx = new AudioContext(); // native rate; downsampled to 16k on send
+    const srcNode = audioCtx.createMediaStreamSource(media);
+    const mute = audioCtx.createGain(); mute.gain.value = 0;
+    mute.connect(audioCtx.destination);
+
+    // Preferred: AudioWorklet. Falls back to ScriptProcessor when the
+    // worklet can't load (e.g. page opened via file:// locally).
+    try {
+      await audioCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([`
+        registerProcessor("tap", class extends AudioWorkletProcessor {
+          process(inputs) {
+            const ch = inputs[0][0];
+            if (ch) this.port.postMessage(ch.slice(0));
+            return true;
+          }
+        });`], { type: "application/javascript" })));
+      workletNode = new AudioWorkletNode(audioCtx, "tap");
+      srcNode.connect(workletNode);
+      workletNode.connect(mute);
+      workletNode.port.onmessage = (e) => { if (recording) recBuffers.push(e.data); };
+      log("capture: AudioWorklet");
+    } catch (we) {
+      log("worklet unavailable (" + we.message + ") — using ScriptProcessor fallback");
+      const proc = audioCtx.createScriptProcessor(4096, 1, 1);
+      srcNode.connect(proc);
+      proc.connect(mute);
+      proc.onaudioprocess = (e) => {
+        if (recording) recBuffers.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      workletNode = proc;
+    }
+
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    srcNode.connect(analyser);
+    const anBuf = new Float32Array(analyser.fftSize);
+    micMeter = setInterval(() => {
+      analyser.getFloatTimeDomainData(anBuf);
+      let rms = 0; for (let i = 0; i < anBuf.length; i++) rms += anBuf[i] * anBuf[i];
+      rms = Math.sqrt(rms / anBuf.length);
+      vizLevel = vizLevel * 0.7 + Math.min(1, rms * 8) * 0.3;
+    }, 33);
+    log(`audio ctx @ ${audioCtx.sampleRate} Hz`);
+  } catch (e) { log("audio pipeline failed: " + e.message, "e"); }
+
+  $("btnTalk").disabled = false;
+  setState("ready");
+  log("session started — hold the talk button (or Space) and speak", "m");
+}
+$("btnStart").onclick = startSession;
+
+/* ---------- Hold-to-talk ---------- */
+const frameCanvas = document.createElement("canvas");
+frameCanvas.width = 640; frameCanvas.height = 480;
+const frameCtx = frameCanvas.getContext("2d");
+
+function snapFrame() {
+  frameCtx.drawImage($("cam"), 0, 0, 640, 480);
+  recFrames.push(frameCanvas.toDataURL("image/jpeg", 0.6));
+  $("frameCount").textContent = recFrames.length + " frames";
+}
+
+function startRec() {
+  if (recording || !audioCtx || $("btnTalk").disabled) return;
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  recording = true; recBuffers = []; recFrames = [];
+  $("btnTalk").classList.add("rec");
+  $("btnTalk").textContent = "🔴 Recording… release to send";
+  $("pip").classList.add("rec");
+  setState("recording", "rec");
+  const c = cfg();
+  if (c.video) { snapFrame(); frameTimer = setInterval(snapFrame, 1000 / c.fps); }
+}
+
+function stopRec() {
+  if (!recording) return;
+  recording = false;
+  if (frameTimer) { clearInterval(frameTimer); frameTimer = null; }
+  $("btnTalk").classList.remove("rec");
+  $("btnTalk").textContent = "🎙 Hold to talk (or hold Space)";
+  $("pip").classList.remove("rec");
+  $("frameCount").textContent = "";
+  sendTurn().catch(e => { log("send failed: " + e.message, "e"); setState("error", "rec"); });
+}
+
+$("btnTalk").addEventListener("mousedown", startRec);
+$("btnTalk").addEventListener("touchstart", (e) => { e.preventDefault(); startRec(); });
+window.addEventListener("mouseup", stopRec);
+window.addEventListener("touchend", stopRec);
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !e.repeat && document.activeElement.tagName !== "INPUT"
+      && document.activeElement.tagName !== "TEXTAREA") { e.preventDefault(); startRec(); }
+});
+document.addEventListener("keyup", (e) => { if (e.code === "Space") stopRec(); });
+
+/* ---------- WAV encoding (downsample native → 16kHz, PCM16) ---------- */
+const TARGET_RATE = 16000;
+function buffersToWav(buffers, nativeRate) {
+  let total = 0; for (const b of buffers) total += b.length;
+  const merged = new Float32Array(total); let off = 0;
+  for (const b of buffers) { merged.set(b, off); off += b.length; }
+  const ratio = nativeRate / TARGET_RATE;
+  const outLen = Math.floor(merged.length / ratio);
+  const pcm = new Int16Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const pos = i * ratio, i0 = Math.floor(pos), frac = pos - i0;
+    const s = merged[i0] + (merged[Math.min(i0 + 1, merged.length - 1)] - merged[i0]) * frac;
+    pcm[i] = Math.max(-32768, Math.min(32767, s * 32767));
+  }
+  const buf = new ArrayBuffer(44 + pcm.length * 2);
+  const v = new DataView(buf);
+  const wstr = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  wstr(0, "RIFF"); v.setUint32(4, 36 + pcm.length * 2, true); wstr(8, "WAVE");
+  wstr(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, TARGET_RATE, true); v.setUint32(28, TARGET_RATE * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  wstr(36, "data"); v.setUint32(40, pcm.length * 2, true);
+  new Int16Array(buf, 44).set(pcm);
+  return { buf, seconds: outLen / TARGET_RATE };
+}
+function b64(arrayBuf) {
+  const bytes = new Uint8Array(arrayBuf); let s = "";
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  return btoa(s);
+}
+
+/* ---------- Send a turn ---------- */
+async function sendTurn() {
+  const c = cfg();
+  if (!c.key) { log("no API key — open ⚙︎ settings", "e"); addCaption("user", "⚠ no API key set (⚙︎)"); return; }
+  if (!recBuffers.length) { log("no audio captured", "e"); return; }
+
+  const { buf, seconds } = buffersToWav(recBuffers, audioCtx.sampleRate);
+  if (seconds < 0.3) { log("recording too short, ignored"); setState("ready"); return; }
+  const audioUrl = "data:audio/wav;base64," + b64(buf);
+
+  const frames = recFrames.length > c.maxFrames
+    ? recFrames.filter((_, i) => i % Math.ceil(recFrames.length / c.maxFrames) === 0).slice(0, c.maxFrames)
+    : recFrames;
+
+  const content = [
+    { type: "text", text: `[Live demo turn: ${seconds.toFixed(1)}s of the user's speech follows as audio${frames.length ? `, plus ${frames.length} webcam snapshots taken evenly across that time` : ""}.]` },
+    { type: "audio_url", audio_url: { url: audioUrl } },
+    ...frames.map(f => ({ type: "image_url", image_url: { url: f } })),
+  ];
+
+  const messages = [
+    ...(c.sys ? [{ role: "system", content: c.sys }] : []),
+    ...(c.history ? history : []),
+    { role: "user", content },
+  ];
+
+  const mb = JSON.stringify(messages).length / 1048576;
+  log(`sending turn: ${seconds.toFixed(1)}s audio, ${frames.length} frames, ~${mb.toFixed(2)} MB`);
+  if (mb > 4.8) log("payload near the 5 MB cap — shorten the recording or lower max frames", "e");
+
+  addCaption("user", `🎙 ${seconds.toFixed(1)}s of speech${frames.length ? ` + ${frames.length} frames` : ""}`);
+  setState("thinking", "thinking");
+  $("latms").textContent = "…";
+  const t0 = performance.now();
+
+  const resp = await fetch(c.url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + c.key },
+    body: JSON.stringify({ model: c.model, messages, stream: true, max_tokens: 400 }),
+  });
+  if (!resp.ok) {
+    const body = await resp.text();
+    log(`HTTP ${resp.status}: ${body.slice(0, 300)}`, "e");
+    addCaption("model", `⚠ ${resp.status} — see Log`);
+    setState("error", "rec");
+    return;
+  }
+
+  const cap = addCaption("model", "");
+  let full = "", gotFirst = false;
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let carry = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    carry += dec.decode(value, { stream: true });
+    const lines = carry.split("\n"); carry = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (data === "[DONE]") continue;
+      let j; try { j = JSON.parse(data); } catch { continue; }
+      const delta = j.choices?.[0]?.delta?.content;
+      if (delta) {
+        if (!gotFirst) {
+          gotFirst = true;
+          $("latms").textContent = Math.round(performance.now() - t0) + " ms";
+          setState("answering", "answering");
+        }
+        full += delta; cap.textContent = full;
+        modelLevel = Math.min(1, modelLevel + 0.3);
+      }
+    }
+  }
+  setState("ready");
+  log(`turn done: ${full.length} chars`);
+
+  if (c.history) {
+    history.push({ role: "user", content: `[spoke ${seconds.toFixed(1)}s of audio${frames.length ? " with webcam frames" : ""} — content was processed in a prior turn]` });
+    history.push({ role: "assistant", content: full });
+    if (history.length > 8) history = history.slice(-8);
+  }
+}
+
+/* ---------- Filming mode / drawer / log ---------- */
+$("btnFilm").onclick = () => document.body.classList.toggle("filming");
+document.addEventListener("keydown", e => { if (e.key === "Escape") document.body.classList.remove("filming"); });
+$("gear").onclick = () => $("drawer").classList.toggle("open");
+$("btnCloseDrawer").onclick = () => $("drawer").classList.remove("open");
+$("btnLog").onclick = () => logEl.style.display = logEl.style.display === "block" ? "none" : "block";
+
+log("harness ready — Start session, then hold Space to talk");
+</script>
+</body>
+</html>
