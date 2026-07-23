@@ -4,6 +4,8 @@ A single-file browser harness for testing [Inkling](https://www.baseten.co/), Th
 
 **Live version:** https://anaskar.github.io/inkling-demo/
 
+**Compare rig:** https://anaskar.github.io/inkling-demo/compare.html — a side-by-side proof page. Each turn transcribes your audio with Inkling, then answers twice with the *same* answer prompt: the left panel gets only the transcript (words), the right panel gets the raw audio. Because the model is held constant and only the input modality differs, any divergence in the two answers is attributable to Inkling actually hearing tone/emphasis/pacing. Great for the "transcript pipelines lose information" demo.
+
 Hold to talk: your speech is recorded from the mic while webcam snapshots are captured, then sent together as one multimodal turn (16kHz WAV `audio_url` + JPEG `image_url` parts) to the OpenAI-compatible chat completions endpoint. The reply streams into on-screen captions with a time-to-first-token readout — plus a stopwatch and filming mode for clean screen recordings.
 
 Because the model receives raw audio (not a transcript) and synchronized frames, it can react to tone of voice, pacing, and what it sees — not just your words.

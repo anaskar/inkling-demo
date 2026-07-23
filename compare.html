@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Inkling — Transcript vs. Raw Audio</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14171c;
+    --border: #262b33;
+    --text: #e8eaed;
+    --dim: #8a919c;
+    --accent: #4fe3a3;
+    --warn: #ffb454;
+    --err: #ff6b6b;
+    --cold: #6ea8ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "SF Pro Display", "Segoe UI", sans-serif; overflow: hidden; }
+
+  #stage { position: relative; height: 100%; display: flex; flex-direction: column;
+    align-items: center; }
+
+  #statusbar { position: absolute; top: 22px; left: 28px; display: flex; gap: 14px;
+    align-items: center; font-size: 13px; color: var(--dim); z-index: 6; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--err); display: inline-block; margin-right: 5px; }
+  .dot.ok { background: var(--accent); }
+
+  #title { margin-top: 22px; font-size: 15px; letter-spacing: 3px; text-transform: uppercase;
+    color: var(--dim); text-align: center; }
+  #title b { color: var(--text); }
+
+  /* Transcript ribbon — the shared words both sides "see" */
+  #transcript { margin: 18px auto 6px; width: min(920px, 90vw); text-align: center;
+    min-height: 42px; }
+  #transcript .lbl { font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--dim); }
+  #transcript .txt { font-size: 24px; font-weight: 600; margin-top: 6px; color: var(--text);
+    font-style: italic; }
+  #transcript .txt.empty { color: var(--dim); font-weight: 400; font-style: normal; }
+
+  /* Two panels */
+  #panels { flex: 1; width: min(1180px, 96vw); margin: 8px auto 0;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding-bottom: 150px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+    padding: 22px 24px; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+  .panel.left { border-color: rgba(110,168,255,0.35); }
+  .panel.right { border-color: rgba(79,227,163,0.35); }
+  .panel .head { display: flex; align-items: baseline; justify-content: space-between; }
+  .panel .name { font-size: 14px; font-weight: 600; letter-spacing: 1px; }
+  .panel.left .name { color: var(--cold); }
+  .panel.right .name { color: var(--accent); }
+  .panel .sub { font-size: 11px; color: var(--dim); margin-top: 3px; }
+  .panel .ttft { font-size: 12px; color: var(--dim); text-align: right;
+    font-variant-numeric: tabular-nums; }
+  .panel .ttft b { font-size: 22px; color: var(--text); display: block; }
+  .panel .answer { margin-top: 20px; font-size: 26px; line-height: 1.42; font-weight: 500;
+    flex: 1; }
+  .panel.left .answer { color: #dfe9ff; }
+  .panel.right .answer { color: #dcffee; }
+  .panel .state { margin-top: 14px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--dim); height: 14px; }
+  .panel.thinking .state { color: var(--warn); }
+  .panel.answering.right .state { color: var(--accent); }
+  .panel.answering.left .state { color: var(--cold); }
+  .panel.err .state { color: var(--err); }
+
+  /* Controls */
+  #controls { position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 10px; transition: opacity 0.25s; align-items: center; z-index: 6; }
+  button { background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 18px; border-radius: 10px; font-size: 14px; cursor: pointer; }
+  button:hover { border-color: var(--dim); }
+  button.primary { background: var(--accent); color: #06251a; border: none; font-weight: 600; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  #btnTalk { min-width: 240px; padding: 14px 22px; font-size: 15px; font-weight: 600; }
+  #btnTalk.rec { background: var(--err); color: #fff; border: none; }
+
+  #pip { position: absolute; bottom: 24px; right: 24px; width: 220px; aspect-ratio: 4/3;
+    border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: #000; z-index: 6; }
+  #pip video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  #pip .pip-label { position: absolute; top: 6px; left: 8px; font-size: 10px;
+    color: rgba(255,255,255,0.75); background: rgba(0,0,0,0.45); padding: 2px 7px; border-radius: 6px; }
+  #pip.rec { border-color: var(--err); }
+  #pip.hidden { display: none; }
+
+  #brand { position: absolute; bottom: 26px; left: 28px; font-size: 13px; color: var(--dim); z-index: 6; }
+  #brand b { color: var(--text); }
+
+  .filming #controls, .filming #gear, .filming #statusbar { opacity: 0; pointer-events: none; }
+  #gear { position: absolute; top: 60px; right: 28px; z-index: 11; }
+
+  #drawer { position: absolute; top: 0; right: 0; height: 100%; width: 400px;
+    background: var(--panel); border-left: 1px solid var(--border); padding: 24px;
+    transform: translateX(100%); transition: transform 0.25s; overflow-y: auto; z-index: 20; }
+  #drawer.open { transform: translateX(0); }
+  #drawer h2 { font-size: 15px; margin-bottom: 16px; }
+  #drawer label { display: block; font-size: 12px; color: var(--dim); margin: 14px 0 4px; }
+  #drawer input[type=text], #drawer input[type=password], #drawer input[type=number], #drawer textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 10px; border-radius: 8px; font-size: 13px; font-family: ui-monospace, monospace; }
+  #drawer textarea { min-height: 70px; resize: vertical; font-family: inherit; }
+  #drawer .row { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; }
+  #drawer .hint { font-size: 11px; color: var(--dim); margin-top: 4px; line-height: 1.4; }
+
+  #log { position: absolute; left: 28px; top: 60px; width: 360px; max-height: 40vh;
+    overflow-y: auto; font: 11px ui-monospace, monospace; color: var(--dim);
+    background: rgba(0,0,0,0.35); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px; display: none; z-index: 5; }
+  .filming #log { display: none !important; }
+  #log div { margin-bottom: 3px; word-break: break-all; }
+  #log .e { color: var(--err); } #log .m { color: var(--accent); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="statusbar">
+    <span><span class="dot" id="micdot"></span>mic</span>
+    <span><span class="dot" id="camdot"></span>cam</span>
+    <span id="keystate">no key</span>
+  </div>
+
+  <div id="title">Same model. Same words. <b>Only one of them heard you.</b></div>
+
+  <div id="transcript">
+    <div class="lbl">what you said (transcript)</div>
+    <div class="txt empty" id="tx">—</div>
+  </div>
+
+  <div id="panels">
+    <div class="panel left" id="pLeft">
+      <div class="head">
+        <div><div class="name">TRANSCRIPT ONLY</div><div class="sub">words only — audio thrown away</div></div>
+        <div class="ttft"><b id="ttftL">–</b>time to first token</div>
+      </div>
+      <div class="answer" id="ansL"></div>
+      <div class="state" id="stateL">ready</div>
+    </div>
+    <div class="panel right" id="pRight">
+      <div class="head">
+        <div><div class="name">INKLING · RAW AUDIO</div><div class="sub">hears tone, pacing, emphasis</div></div>
+        <div class="ttft"><b id="ttftR">–</b>time to first token</div>
+      </div>
+      <div class="answer" id="ansR"></div>
+      <div class="state" id="stateR">ready</div>
+    </div>
+  </div>
+
+  <div id="controls">
+    <button class="primary" id="btnStart">Start session</button>
+    <button id="btnTalk" disabled>🎙 Hold to talk (or hold Space)</button>
+    <button id="btnClear">Clear</button>
+    <button id="btnFilm">🎬 Filming mode</button>
+    <button id="btnLog">Log</button>
+  </div>
+
+  <div id="pip" class="hidden">
+    <video id="cam" autoplay muted playsinline></video>
+    <span class="pip-label">MODEL'S VIEW</span>
+  </div>
+
+  <div id="brand">thinkingmachines/inkling · <b>Baseten Model APIs</b></div>
+
+  <button id="gear" title="Settings">⚙︎</button>
+  <div id="log"></div>
+</div>
+
+<div id="drawer">
+  <h2>Compare config</h2>
+
+  <label>Baseten API key</label>
+  <input type="password" id="cfgKey" placeholder="paste key (kept in memory only)">
+
+  <label>Endpoint</label>
+  <input type="text" id="cfgUrl" value="https://inference.baseten.co/v1/chat/completions">
+
+  <label>Inkling model (right / raw audio + transcription)</label>
+  <input type="text" id="cfgModel" value="thinkingmachines/inkling">
+
+  <label>Text model (left / transcript-only answer)</label>
+  <input type="text" id="cfgTextModel" value="thinkingmachines/inkling">
+  <div class="hint">Defaults to the same model as the right side — so the ONLY variable is raw audio vs. a transcript. Swap in any text LLM to tell the "transcript pipeline" story instead.</div>
+
+  <label>Answer instruction (system prompt — sent to BOTH sides)</label>
+  <textarea id="cfgSys">You are in a live voice demo. Reply in ONE short, natural sentence, reacting to how the person actually feels or means it — not just the literal words.</textarea>
+
+  <label>Transcription instruction (Inkling, to get the words)</label>
+  <textarea id="cfgTx">Transcribe the user's speech verbatim. Output only the exact words spoken — no quotes, no commentary.</textarea>
+
+  <div class="row"><input type="checkbox" id="cfgVideo"> <span>Attach webcam frames to Inkling side</span></div>
+  <label>Max frames per turn</label>
+  <input type="number" id="cfgMaxFrames" value="8">
+  <div class="hint">Off by default: the cleanest tone demo is audio-only. Turn on for audio+vision fusion turns. Keep total request under 5&nbsp;MB.</div>
+
+  <button style="margin-top:20px" id="btnCloseDrawer">Close</button>
+</div>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   Side-by-side proof rig for Inkling on Baseten Model APIs.
+   On each hold-to-talk turn we:
+     1. transcribe the raw audio with Inkling (verbatim) -> the shared words,
+     2. LEFT panel: send ONLY that transcript (text) to the text model,
+     3. RIGHT panel: send the raw audio (+ optional frames) to Inkling,
+   both with the SAME answer system prompt. Only the input modality differs,
+   so any divergence in the two answers is attributable to hearing the audio.
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+const logEl = $("log");
+function log(t, cls) { const d = document.createElement("div"); if (cls) d.className = cls;
+  d.textContent = `${new Date().toISOString().slice(11,23)} ${t}`;
+  logEl.appendChild(d); logEl.scrollTop = 1e9;
+  while (logEl.children.length > 300) logEl.firstChild.remove(); }
+
+const cfg = () => ({
+  key: $("cfgKey").value.trim(),
+  url: $("cfgUrl").value.trim(),
+  model: $("cfgModel").value.trim(),
+  textModel: $("cfgTextModel").value.trim(),
+  sys: $("cfgSys").value.trim(),
+  tx: $("cfgTx").value.trim(),
+  video: $("cfgVideo").checked,
+  maxFrames: Math.max(1, +$("cfgMaxFrames").value || 8),
+});
+$("cfgKey").addEventListener("input", () =>
+  $("keystate").textContent = $("cfgKey").value.trim() ? "key set" : "no key");
+$("cfgVideo").addEventListener("change", () =>
+  $("pip").classList.toggle("hidden", !$("cfgVideo").checked || !media));
+
+/* ---------- Panel helpers ---------- */
+function setPanel(side, cls) {
+  const p = side === "L" ? $("pLeft") : $("pRight");
+  const base = side === "L" ? "panel left" : "panel right";
+  p.className = base + (cls ? " " + cls : "");
+}
+function setState(side, s) { $(side === "L" ? "stateL" : "stateR").textContent = s; }
+function resetPanels() {
+  $("ansL").textContent = ""; $("ansR").textContent = "";
+  $("ttftL").textContent = "–"; $("ttftR").textContent = "–";
+  setState("L", "ready"); setState("R", "ready"); setPanel("L"); setPanel("R");
+  $("tx").textContent = "—"; $("tx").className = "txt empty";
+}
+$("btnClear").onclick = () => { resetPanels(); log("cleared"); };
+
+/* ---------- Session: mic + cam ---------- */
+let media = null, audioCtx = null, workletNode = null;
+let recording = false, recBuffers = [], recFrames = [], frameTimer = null;
+const setDot = (id, ok) => $(id).className = "dot" + (ok ? " ok" : "");
+
+async function startSession() {
+  $("btnStart").disabled = true;
+  try {
+    media = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      video: { width: 640, height: 480 },
+    });
+    $("cam").srcObject = media;
+    setDot("micdot", true); setDot("camdot", true);
+    $("pip").classList.toggle("hidden", !$("cfgVideo").checked);
+    log("mic + cam acquired");
+  } catch (e) { log("getUserMedia failed: " + e.message, "e"); $("btnStart").disabled = false; return; }
+
+  try {
+    audioCtx = new AudioContext();
+    const srcNode = audioCtx.createMediaStreamSource(media);
+    const mute = audioCtx.createGain(); mute.gain.value = 0;
+    mute.connect(audioCtx.destination);
+    try {
+      await audioCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([`
+        registerProcessor("tap", class extends AudioWorkletProcessor {
+          process(inputs) { const ch = inputs[0][0]; if (ch) this.port.postMessage(ch.slice(0)); return true; }
+        });`], { type: "application/javascript" })));
+      workletNode = new AudioWorkletNode(audioCtx, "tap");
+      srcNode.connect(workletNode); workletNode.connect(mute);
+      workletNode.port.onmessage = (e) => { if (recording) recBuffers.push(e.data); };
+      log("capture: AudioWorklet");
+    } catch (we) {
+      log("worklet unavailable (" + we.message + ") — ScriptProcessor fallback");
+      const proc = audioCtx.createScriptProcessor(4096, 1, 1);
+      srcNode.connect(proc); proc.connect(mute);
+      proc.onaudioprocess = (e) => { if (recording) recBuffers.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+      workletNode = proc;
+    }
+    log(`audio ctx @ ${audioCtx.sampleRate} Hz`);
+  } catch (e) { log("audio pipeline failed: " + e.message, "e"); }
+
+  $("btnTalk").disabled = false;
+  log("session started — hold the talk button (or Space) and speak", "m");
+}
+$("btnStart").onclick = startSession;
+
+/* ---------- Hold-to-talk ---------- */
+const frameCanvas = document.createElement("canvas");
+frameCanvas.width = 640; frameCanvas.height = 480;
+const frameCtx = frameCanvas.getContext("2d");
+function snapFrame() { frameCtx.drawImage($("cam"), 0, 0, 640, 480); recFrames.push(frameCanvas.toDataURL("image/jpeg", 0.6)); }
+
+function startRec() {
+  if (recording || !audioCtx || $("btnTalk").disabled) return;
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  recording = true; recBuffers = []; recFrames = [];
+  $("btnTalk").classList.add("rec"); $("btnTalk").textContent = "🔴 Recording… release to send";
+  $("pip").classList.add("rec");
+  const c = cfg();
+  if (c.video) { snapFrame(); frameTimer = setInterval(snapFrame, 1000); }
+}
+function stopRec() {
+  if (!recording) return;
+  recording = false;
+  if (frameTimer) { clearInterval(frameTimer); frameTimer = null; }
+  $("btnTalk").classList.remove("rec"); $("btnTalk").textContent = "🎙 Hold to talk (or hold Space)";
+  $("pip").classList.remove("rec");
+  sendTurn().catch(e => { log("turn failed: " + e.message, "e"); });
+}
+$("btnTalk").addEventListener("mousedown", startRec);
+$("btnTalk").addEventListener("touchstart", (e) => { e.preventDefault(); startRec(); });
+window.addEventListener("mouseup", stopRec);
+window.addEventListener("touchend", stopRec);
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !e.repeat && document.activeElement.tagName !== "INPUT"
+      && document.activeElement.tagName !== "TEXTAREA") { e.preventDefault(); startRec(); }
+});
+document.addEventListener("keyup", (e) => { if (e.code === "Space") stopRec(); });
+
+/* ---------- WAV encoding (anti-aliased native -> 16kHz, PCM16) ---------- */
+const TARGET_RATE = 16000;
+async function buffersToWav(buffers, nativeRate) {
+  let total = 0; for (const b of buffers) total += b.length;
+  const merged = new Float32Array(total); let off = 0;
+  for (const b of buffers) { merged.set(b, off); off += b.length; }
+
+  let out = merged;
+  if (nativeRate !== TARGET_RATE && typeof OfflineAudioContext !== "undefined") {
+    const outLen = Math.max(1, Math.round(merged.length * TARGET_RATE / nativeRate));
+    const octx = new OfflineAudioContext(1, outLen, TARGET_RATE);
+    const srcBuf = octx.createBuffer(1, merged.length, nativeRate);
+    srcBuf.copyToChannel(merged, 0);
+    const src = octx.createBufferSource(); src.buffer = srcBuf;
+    const lp = octx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = TARGET_RATE * 0.45;
+    src.connect(lp); lp.connect(octx.destination);
+    src.start();
+    out = (await octx.startRendering()).getChannelData(0);
+  }
+
+  const pcm = new Int16Array(out.length);
+  for (let i = 0; i < out.length; i++) { const s = Math.max(-1, Math.min(1, out[i])); pcm[i] = s < 0 ? s * 32768 : s * 32767; }
+  const buf = new ArrayBuffer(44 + pcm.length * 2);
+  const v = new DataView(buf);
+  const wstr = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  wstr(0, "RIFF"); v.setUint32(4, 36 + pcm.length * 2, true); wstr(8, "WAVE");
+  wstr(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, TARGET_RATE, true); v.setUint32(28, TARGET_RATE * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  wstr(36, "data"); v.setUint32(40, pcm.length * 2, true);
+  new Int16Array(buf, 44).set(pcm);
+  return { buf, seconds: pcm.length / TARGET_RATE };
+}
+function b64(arrayBuf) {
+  const bytes = new Uint8Array(arrayBuf); let s = ""; const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  return btoa(s);
+}
+
+/* ---------- API helpers ---------- */
+async function chatComplete(c, model, messages) {
+  const resp = await fetch(c.url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + c.key },
+    body: JSON.stringify({ model, messages, stream: false, max_tokens: 200 }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+  const j = await resp.json();
+  return (j.choices?.[0]?.message?.content || "").trim();
+}
+
+// Streams a completion into `elId`, updates `side` TTFT/state. Returns full text.
+async function streamInto(c, model, messages, side, elId) {
+  const el = $(elId), t0 = performance.now();
+  setPanel(side, "thinking"); setState(side, "thinking…");
+  $(side === "L" ? "ttftL" : "ttftR").textContent = "…";
+  const resp = await fetch(c.url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + c.key },
+    body: JSON.stringify({ model, messages, stream: true, max_tokens: 200 }),
+  });
+  if (!resp.ok) {
+    const body = await resp.text();
+    el.textContent = `⚠ ${resp.status} — see Log`; setPanel(side, "err"); setState(side, "error");
+    log(`HTTP ${resp.status}: ${body.slice(0, 200)}`, "e");
+    return "";
+  }
+  let full = "", gotFirst = false, carry = "";
+  const reader = resp.body.getReader(), dec = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    carry += dec.decode(value, { stream: true });
+    const lines = carry.split("\n"); carry = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (data === "[DONE]") continue;
+      let j; try { j = JSON.parse(data); } catch { continue; }
+      const delta = j.choices?.[0]?.delta?.content;
+      if (delta) {
+        if (!gotFirst) {
+          gotFirst = true;
+          $(side === "L" ? "ttftL" : "ttftR").textContent = Math.round(performance.now() - t0) + " ms";
+          setPanel(side, "answering"); setState(side, "answering");
+        }
+        full += delta; el.textContent = full;
+      }
+    }
+  }
+  setState(side, "done");
+  return full;
+}
+
+/* ---------- Send a turn ---------- */
+async function sendTurn() {
+  const c = cfg();
+  if (!c.key) { log("no API key — open ⚙︎", "e"); $("tx").textContent = "⚠ no API key set (⚙︎)"; $("tx").className = "txt"; return; }
+  if (!recBuffers.length) { log("no audio captured", "e"); return; }
+
+  const { buf, seconds } = await buffersToWav(recBuffers, audioCtx.sampleRate);
+  if (seconds < 0.3) { log("recording too short, ignored"); return; }
+  const audioUrl = "data:audio/wav;base64," + b64(buf);
+
+  const frames = c.video
+    ? (recFrames.length > c.maxFrames
+        ? recFrames.filter((_, i) => i % Math.ceil(recFrames.length / c.maxFrames) === 0).slice(0, c.maxFrames)
+        : recFrames)
+    : [];
+
+  resetPanels();
+  log(`turn: ${seconds.toFixed(1)}s audio${frames.length ? `, ${frames.length} frames` : ""}`);
+
+  // RIGHT (Inkling, raw audio) — fire immediately, no transcription dependency.
+  const inklingContent = [
+    { type: "text", text: `[Live demo: ${seconds.toFixed(1)}s of the user's raw speech follows as audio${frames.length ? `, plus ${frames.length} webcam snapshots` : ""}.]` },
+    { type: "audio_url", audio_url: { url: audioUrl } },
+    ...frames.map(f => ({ type: "image_url", image_url: { url: f } })),
+  ];
+  const rightP = streamInto(c, c.model, [
+    { role: "system", content: c.sys },
+    { role: "user", content: inklingContent },
+  ], "R", "ansR");
+
+  // LEFT (transcript only): transcribe with Inkling, show words, then answer text-only.
+  const leftP = (async () => {
+    setPanel("L", "thinking"); setState("L", "transcribing…"); $("ttftL").textContent = "…";
+    let transcript = "";
+    try {
+      transcript = await chatComplete(c, c.model, [
+        { role: "system", content: c.tx },
+        { role: "user", content: [
+          { type: "text", text: "Transcribe this audio verbatim." },
+          { type: "audio_url", audio_url: { url: audioUrl } },
+        ] },
+      ]);
+    } catch (e) {
+      $("tx").textContent = "⚠ transcription failed — see Log"; $("tx").className = "txt";
+      setPanel("L", "err"); setState("L", "error"); log("transcribe: " + e.message, "e");
+      return;
+    }
+    $("tx").textContent = transcript || "(nothing transcribed)";
+    $("tx").className = "txt" + (transcript ? "" : " empty");
+    log(`transcript: "${transcript}"`);
+    await streamInto(c, c.textModel, [
+      { role: "system", content: c.sys },
+      { role: "user", content: transcript },
+    ], "L", "ansL");
+  })();
+
+  await Promise.allSettled([rightP, leftP]);
+  log("turn complete");
+}
+
+/* ---------- Filming / drawer / log ---------- */
+$("btnFilm").onclick = () => document.body.classList.toggle("filming");
+document.addEventListener("keydown", e => { if (e.key === "Escape") document.body.classList.remove("filming"); });
+$("gear").onclick = () => $("drawer").classList.toggle("open");
+$("btnCloseDrawer").onclick = () => $("drawer").classList.remove("open");
+$("btnLog").onclick = () => logEl.style.display = logEl.style.display === "block" ? "none" : "block";
+
+log("compare rig ready — Start session, then hold Space to talk");
+</script>
+</body>
+</html>
